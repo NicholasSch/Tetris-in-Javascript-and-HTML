@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TETRISOW — Outer Wilds Edition</title>
+    <style>
+        body {
+            background-image: url('https://fs-prod-cdn.nintendo-europe.com/media/images/10_share_images/games_15/nintendo_switch_4/H2x1_NSwitch_OuterWilds_image1600w.jpg');
+            background-repeat: no-repeat;
+            background-size: cover;
+            background-position: center;
+            text-align: center;
+            font-family: 'Arial', sans-serif;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #0c121d;
+        }
+
+        #game-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            gap: 15px;
+        }
+
+        canvas {
+            height: 90vh;
+            background-color: rgba(0, 0, 0, 0.85);
+            border: 4px solid #1a2b3c;
+            border-radius: 8px;
+            box-shadow: 0 0 25px rgba(0, 0, 0, 0.7);
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="canvasStats" width="125" height="400" style="display: none;"></canvas>
+    <canvas id="canvasBoard" width="201" height="400"></canvas>
+    <canvas id="canvasNext" width="125" height="400" style="display: none;"></canvas>
+</div>
+
+<audio id="music1" preload="auto"><source src="outer wilds.mp3" type="audio/mpeg"></audio>
+<audio id="music2" preload="auto"><source src="timber hearth.mp3" type="audio/mpeg"></audio>
+<audio id="music3" preload="auto"><source src="main title.mp3" type="audio/mpeg"></audio>
+<audio id="music4" preload="auto"><source src="travelers.mp3" type="audio/mpeg"></audio>
+<audio id="music5" preload="auto"><source src="outer wilds-reprise.mp3" type="audio/mpeg"></audio>
+<audio id="music6" preload="auto"><source src="14.3 billion years.mp3" type="audio/mpeg"></audio>
+
+<audio id="sfxMove" preload="auto"><source src="pecamexeu.mp3" type="audio/mpeg"></audio>
+<audio id="sfxRotate" preload="auto"><source src="pecamexeu.mp3" type="audio/mpeg"></audio>
+<audio id="sfxLock" preload="auto"><source src="peca travada.mp3" type="audio/mpeg"></audio>
+<audio id="sfxClear" preload="auto"><source src="line clear.mp3" type="audio/mpeg"></audio>
+<audio id="sfxGameOver" preload="auto"><source src="game over.mp3" type="audio/mpeg"></audio>
+
+<script>
+    // --- Global Configuration Parameters ---
+    var isSoundEffectsEnabled = true;
+    var isMusicEnabled = true;
+    var activePlaylist = [];
+    var currentSongIndex = 0;
+
+    // --- DOM Audio References Query Subsystem ---
+    var audioTracks = [
+        document.getElementById("music1"),
+        document.getElementById("music2"),
+        document.getElementById("music3"),
+        document.getElementById("music4"),
+        document.getElementById("music5"),
+        document.getElementById("music6")
+    ];
+
+    var sfxMove = document.getElementById("sfxMove");
+    var sfxRotate = document.getElementById("sfxRotate");
+    var sfxLock = document.getElementById("sfxLock");
+    var sfxClear = document.getElementById("sfxClear");
+    var sfxGameOver = document.getElementById("sfxGameOver");
+
+    // Initialize unified audio volume bounds
+    audioTracks.forEach(track => { if(track) track.volume = 0.3; });
+    sfxMove.volume = 0.7;
+    sfxRotate.volume = 0.7;
+    sfxLock.volume = 0.4;
+    sfxClear.volume = 0.5;
+    sfxGameOver.volume = 0.3;
+
+    // --- Structured Audio Queue Management System ---
+    function shuffleArray(array) {
+        var currentIndex = array.length, randomIndex;
+        while (currentIndex !== 0) {
+            randomIndex = Math.floor(Math.random() * currentIndex);
+            currentIndex--;
+            var temp = array[currentIndex];
+            array[currentIndex] = array[randomIndex];
+            array[randomIndex] = temp;
+        }
+        return array;
+    }
+
+    function stopAllMusic() {
+        audioTracks.forEach(track => {
+            if (track) {
+                track.pause();
+                track.currentTime = 0;
+                track.onended = null;
+            }
+        });
+    }
+
+    function startMusicEngine() {
+        stopAllMusic();
+        if (!isMusicEnabled) return;
+
+        activePlaylist = shuffleArray([...audioTracks]);
+        currentSongIndex = 0;
+
+        function playNext() {
+            if (!isMusicEnabled) return;
+            if (currentSongIndex >= activePlaylist.length) {
+                activePlaylist = shuffleArray([...audioTracks]);
+                currentSongIndex = 0;
+            }
+            var track = activePlaylist[currentSongIndex];
+            if (track) {
+                track.currentTime = 0;
+                track.play().catch(e => console.log("Audio waiting for user gesture..."));
+                track.onended = function() {
+                    currentSongIndex++;
+                    playNext();
+                };
+            }
+        }
+        playNext();
+    }
+
+    function triggerSoundEffect(effectName) {
+        if (!isSoundEffectsEnabled) return;
+        if (effectName === "move") { sfxMove.currentTime = 0; sfxMove.play().catch(() => {}); }
+        else if (effectName === "rotate") { sfxRotate.currentTime = 0; sfxRotate.play().catch(() => {}); }
+        else if (effectName === "lock") { sfxLock.currentTime = 0; sfxLock.play().catch(() => {}); }
+        else if (effectName === "clear") { sfxClear.currentTime = 0; sfxClear.play().catch(() => {}); }
+        else if (effectName === "gameover") { stopAllMusic(); sfxGameOver.currentTime = 0; sfxGameOver.play().catch(() => {}); }
+    }
+
+    // --- Canvas Presentation Configuration Context Layer ---
+    var canvasBoard = document.getElementById("canvasBoard");
+    var ctxBoard = canvasBoard.getContext("2d");
+    var canvasStats = document.getElementById("canvasStats");
+    var ctxStats = canvasStats.getContext("2d");
+    var canvasNext = document.getElementById("canvasNext");
+    var ctxNext = canvasNext.getContext("2d");
+
+    // --- State Metrics Variables ---
+    var username = "AAA";
+    var playerScore = 0;
+    var gameLevel = 0;
+    var linesClearedInLevel = 0;
+    var difficultyMultiplier = 0.0;
+    var baseFallDelay = 1000;
+    var speedIncrement = 0;
+
+    // Game states matrix variables
+    var isEasyMode = true;
+    var isMediumMode = false;
+    var isHardMode = false;
+    var isInitialScreen = true;
+    var isDifficultyScreen = false;
+    var isGameplayActive = false;
+    var isLeaderboardScreen = false;
+    var isOptionsScreen = false;
+
+    // --- Tetromino Blueprint Data Definitions ---
+        const I = [[[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],[[0,0,1,0],[0,0,1,0],[0,0,1,0],[0,0,1,0]],[[0,0,0,0],[0,0,0,0],[1,1,1,1],[0,0,0,0]],[[0,1,0,0],[0,1,0,0],[0,1,0,0],[0,1,0,0]]];
+    const J = [[[1,0,0],[1,1,1],[0,0,0]],[[0,1,1],[0,1,0],[0,1,0]],[[0,0,0],[1,1,1],[0,0,1]],[[0,1,0],[0,1,0],[1,1,0]]];
+    const L = [[[0,0,1],[1,1,1],[0,0,0]],[[0,1,0],[0,1,0],[0,1,1]],[[0,0,0],[1,1,1],[1,0,0]],[[1,1,0],[0,1,0],[0,1,0]]];
+    const O = [[[0,0,0,0],[0,1,1,0],[0,1,1,0],[0,0,0,0]]];
+    const S = [[[0,1,1],[1,1,0],[0,0,0]],[[0,1,0],[0,1,1],[0,0,1]],[[0,0,0],[0,1,1],[1,1,0]],[[1,0,0],[1,1,0],[0,1,0]]];
+    const T = [[[0,1,0],[1,1,1],[0,0,0]],[[0,1,0],[0,1,1],[0,1,0]],[[0,0,0],[1,1,1],[0,1,0]],[[0,1,0],[1,1,0],[0,1,0]]];
+    const Z = [[[1,1,0],[0,1,1],[0,0,0]],[[0,0,1],[0,1,1],[0,1,0]],[[0,0,0],[1,1,0],[0,1,1]],[[0,1,0],[1,1,0],[1,0,0]]];
+
+    const PIECES = [[Z, "#e74c3c"], [S, "#2ecc71"], [T, "#3498db"], [O, "#9b59b6"], [L, "#f1c40f"], [I, "#1abc9c"], [J, "#e67e22"]];
+    const ROW_COUNT = 20; const COL_COUNT = 10; const BLOCK_SIZE = 20; const VACANT = "black";
+
+
+    var activePiece; var gridMatrix = []; var nextPiecesQueue = []; var lastDropTime; var isGameOver = false;
+
+
+    // --- Subroutines Presentation & Render Mapping Core Engine ---
+    function renderNextPanel() {
+        ctxNext.clearRect(0, 0, 125, 400);
+        ctxNext.fillStyle = "black"; ctxNext.fillRect(0, 0, 125, 400);
+
+
+        for (let idx = 0; idx < 5; idx++) {
+            let pieceId = nextPiecesQueue[idx];
+            let matrix = PIECES[pieceId][0][0];
+            ctxNext.fillStyle = PIECES[pieceId][1];
+            for (let r = 0; r < matrix.length; r++) {
+                for (let c = 0; c < matrix[r].length; c++) {
+                    if (matrix[r][c]) {
+                        ctxNext.fillRect((1.2 + c) * BLOCK_SIZE, (1.5 + (idx * 3.8) + r) * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+                        ctxNext.strokeStyle = "#222";
+                        ctxNext.strokeRect((1.2 + c) * BLOCK_SIZE, (1.5 + (idx * 3.8) + r) * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+                    }
+                }
+            }
+        }
+    }
+
+    function renderStatsPanel() {
+        ctxStats.clearRect(0, 0, 125, 400);
+        ctxStats.fillStyle = "black"; ctxStats.fillRect(0, 0, 125, 400);
+        ctxStats.fillStyle = "#4a154b"; ctxStats.fillRect(8, 5, 109, 40);
+        ctxStats.font = "bold 16px Arial"; ctxStats.fillStyle = "#3498db"; ctxStats.fillText("STATUS", 32, 30);
+        ctxStats.font = "14px Arial"; ctxStats.fillStyle = "#fff"; ctxStats.fillText("Name:", 15, 75);
+        ctxStats.fillStyle = "#f1c40f"; ctxStats.fillText(username.toUpperCase(), 15, 95);
+        ctxStats.fillStyle = "#fff"; ctxStats.fillText("Score:", 15, 140);
+        ctxStats.fillStyle = "#2ecc71"; ctxStats.fillText(playerScore.toString(), 15, 160);
+        ctxStats.fillStyle = "#fff"; ctxStats.fillText("Level:", 15, 210);
+        ctxStats.fillStyle = "#e67e22"; ctxStats.fillText(gameLevel.toString(), 15, 230);
+        ctxStats.fillStyle = "#fff"; ctxStats.fillText("Lines Clear:", 15, 280);
+        ctxStats.fillStyle = "#1abc9c"; ctxStats.fillText(linesClearedInLevel.toString() + " / 10", 15, 300);
+    }
+
+    function initializeGridBoard() {
+        for (let r = 0; r < ROW_COUNT; r++) {
+            gridMatrix[r] = [];
+            for (let c = 0; c < COL_COUNT; c++) { gridMatrix[r][c] = VACANT; }
+        }
+    }
+
+    function drawGridBoard() {
+        for (let r = 0; r < ROW_COUNT; r++) {
+            for (let c = 0; c < COL_COUNT; c++) {
+                ctxBoard.fillStyle = gridMatrix[r][c];
+                ctxBoard.fillRect(c * BLOCK_SIZE, r * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+                ctxBoard.strokeStyle = "#222";
+                ctxBoard.strokeRect(c * BLOCK_SIZE, r * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+            }
+        }
+    }
+
+    function generateNextPiece() {
+        while (nextPiecesQueue.length < 6) {
+            nextPiecesQueue.push(Math.floor(Math.random() * PIECES.length));
+        }
+
+        let targetId = nextPiecesQueue.shift();
+        renderNextPanel();
+
+        if (!isGameOver) {
+            activePiece = {
+                tetromino: PIECES[targetId][0], color: PIECES[targetId][1],
+                patternIndex: 0, activePattern: [[]], x: 3, y: -2
+            };
+            activePiece.activePattern = activePiece.tetromino[activePiece.patternIndex];
+        }
+    }
+
+    function processGameOverState() {
+        triggerSoundEffect("gameover");
+        
+        let record = { name: username, points: playerScore };
+        let leaderboard = localStorage.getItem('ranking') ? JSON.parse(localStorage.getItem('ranking')) : [];
+        leaderboard.push(record);
+        
+        localStorage.setItem('ranking', JSON.stringify(leaderboard));
+        renderLeaderboards();
+    }
+
+    function startGameplayLoop() {
+        document.getElementById("canvasStats").style.display = "block";
+        document.getElementById("canvasNext").style.display = "block";
+        nextPiecesQueue = []; playerScore = 0; gameLevel = 0; linesClearedInLevel = 0; speedIncrement = 0; isGameOver = false;
+        isGameplayActive = true; isInitialScreen = false; isLeaderboardScreen = false; isOptionsScreen = false; isDifficultyScreen = false;
+
+        ctxBoard.clearRect(0, 0, 201, 400);
+
+        let inputName = "";
+        while (inputName.length !== 3) {
+            inputName = prompt("Enter profile initials (Exactly 3 characters):", "PIL");
+            if (inputName === null) inputName = "AAA";
+            inputName = inputName.trim();
+        }
+        username = inputName;
+
+        initializeGridBoard();
+        drawGridBoard();
+        renderStatsPanel();
+        generateNextPiece();
+
+        lastDropTime = Date.now();
+        executeTick();
+    }
+
+    function executeTick() {
+        if (!isGameplayActive || isGameOver) return;
+        var elapsed = Date.now() - lastDropTime;
+        var threshold = isEasyMode ? 1000 - speedIncrement : isMediumMode ? 700 - speedIncrement : 450 - speedIncrement;
+
+        if (elapsed > Math.max(threshold, 50)) {
+            movePieceDown();
+            lastDropTime = Date.now();
+        }
+
+        requestAnimationFrame(executeTick);
+
+    }
+
+    function fillActivePiece(color) {
+        for (let r = 0; r < activePiece.activePattern.length; r++) {
+                for (let c = 0; c < activePiece.activePattern[r].length; c++) {
+                if (activePiece.activePattern[r][c]) {
+                    let boardX = activePiece.x + c; let boardY = activePiece.y + r;
+                    if (boardY >= 0) {
+                        ctxBoard.fillStyle = color;
+                        ctxBoard.fillRect(boardX * BLOCK_SIZE, boardY * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+                        ctxBoard.strokeStyle = "#222";
+                        ctxBoard.strokeRect(boardX * BLOCK_SIZE, boardY * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+                    }
+                }
+            }
+        }
+    }
+
+    function checkCollision(offsetX, offsetY, pattern) {
+        for (let r = 0; r < pattern.length; r++) {
+            for (let c = 0; c < pattern[r].length; c++) {
+
+                if (!pattern[r][c]) continue;
+                let nextX = activePiece.x + c + offsetX; let nextY = activePiece.y + r + offsetY;
+                if (nextX < 0 || nextX >= COL_COUNT || nextY >= ROW_COUNT) return true;
+                if (nextY < 0) continue;
+                if (gridMatrix[nextY][nextX] !== VACANT) return true;
+            }
+        }
+        return false;
+    }
+
+    function movePieceDown() {
+        if (!checkCollision(0, 1, activePiece.activePattern)) {
+            fillActivePiece(VACANT); activePiece.y++; fillActivePiece(activePiece.color);
+        } else {
+            lockPieceToBoard();
+        }
+    }
+
+    function lockPieceToBoard() {
+        triggerSoundEffect("lock");
+        
+        for (let r = 0; r < activePiece.activePattern.length; r++) {
+            for (let c = 0; c < activePiece.activePattern[r].length; c++) {
+                if (!activePiece.activePattern[r][c]) continue;
+
+                if (activePiece.y + r < 0) {
+                    isGameOver = true; isGameplayActive = false; processGameOverState(); return;
+                }
+                gridMatrix[activePiece.y + r][activePiece.x + c] = activePiece.color;
+            }
+        }
+
+        let consecutiveLineClears = 0;
+
+        for (let r = 0; r < ROW_COUNT; r++) {
+            let isRowFull = true;
+            for (let c = 0; c < COL_COUNT; c++) { isRowFull = isRowFull && (gridMatrix[r][c] !== VACANT); }
+
+            if (isRowFull) {
+                consecutiveLineClears++; triggerSoundEffect("clear");
+
+                for (let y = r; y > 1; y--) {
+                    for (let c = 0; c < COL_COUNT; c++) { gridMatrix[y][c] = gridMatrix[y - 1][c]; }
+                }
+                for (let c = 0; c < COL_COUNT; c++) { gridMatrix[0][c] = VACANT; }
+
+                linesClearedInLevel++;
+                if (linesClearedInLevel >= 10) { linesClearedInLevel = 0; gameLevel++; speedIncrement += 45; }
+            }
+        }
+
+        // Award dynamic row points multipliers matching consecutive lines cleared
+        if (consecutiveLineClears > 0) {
+            let baseScoreAwards = [0, 100, 300, 500, 800];
+            playerScore += Math.floor(baseScoreAwards[Math.min(consecutiveLineClears, 4)] * (1 + (gameLevel / 10) + difficultyMultiplier));
+        }
+        renderStatsPanel();
+
+        drawGridBoard();
+        generateNextPiece();
+    }
+
+    function rotatePiece() {
+        let nextIndex = (activePiece.patternIndex + 1) % activePiece.tetromino.length;
+        let nextPattern = activePiece.tetromino[nextIndex]; let kickOffset = 0;
+        if (checkCollision(0, 0, nextPattern)) { kickOffset = activePiece.x > COL_COUNT / 2 ? -1 : 1; }
+
+        if (!checkCollision(kickOffset, 0, nextPattern)) {
+            fillActivePiece(VACANT); activePiece.x += kickOffset; activePiece.patternIndex = nextIndex;
+            activePiece.activePattern = nextPattern; fillActivePiece(activePiece.color);
+        }
+    }
+
+    // --- Keyboard Event Handling Subsystem ---
+    window.addEventListener("keydown", function(event) {
+        if (!isGameplayActive || isGameOver) return;
+        
+        let key = event.keyCode;
+        if (key === 37) { // Left arrow
+            if (!checkCollision(-1, 0, activePiece.activePattern)) {
+                fillActivePiece(VACANT); activePiece.x--; fillActivePiece(activePiece.color); triggerSoundEffect("move");
+            }
+        } else if (key === 38 || key === 90) { // Up arrow or Z 
+        rotatePiece(); triggerSoundEffect("rotate"); 
+        } else if (key === 39) { // Right arrow
+            if (!checkCollision(1, 0, activePiece.activePattern)) {
+                fillActivePiece(VACANT); activePiece.x++; fillActivePiece(activePiece.color); triggerSoundEffect("move");
+            }
+        } else if (key === 40) { // Down arrow (Soft Drop)
+            movePieceDown(); playerScore += 1; renderStatsPanel(); triggerSoundEffect("move"); 
+        } else if (key === 32) { // Spacebar (Hard Drop)
+            event.preventDefault(); let dropSteps = 0;
+            while (!checkCollision(0, 1, activePiece.activePattern)) { fillActivePiece(VACANT); activePiece.y++; dropSteps++; }
+            playerScore += (dropSteps * 2); lockPieceToBoard();
+        }
+    });
+
+    // --- Screen Views Routing Framework ---
+
+    function hideSidebars() {
+        document.getElementById("canvasStats").style.display = "none";
+        document.getElementById("canvasNext").style.display = "none";
+    }
+
+
+    function renderInitialMenu() {
+        hideSidebars();
+        isInitialScreen = true; isGameplayActive = false; isLeaderboardScreen = false; isOptionsScreen = false; isDifficultyScreen = false;
+        
+        ctxBoard.clearRect(0, 0, 201, 400);
+        ctxBoard.fillStyle = "black"; ctxBoard.fillRect(0, 0, 201, 400);
+
+        ctxBoard.fillStyle = "#162534"; ctxBoard.fillRect(10, 100, 181, 45);
+        ctxBoard.font = "20px Arial"; ctxBoard.fillStyle = "#3498db"; ctxBoard.fillText("Start Game", 50, 128);
+
+        ctxBoard.fillStyle = "#162534"; ctxBoard.fillRect(10, 180, 181, 45);
+        ctxBoard.fillStyle = "#3498db"; ctxBoard.fillText("Leaderboards", 40, 209);
+
+        ctxBoard.fillStyle = "#162534"; ctxBoard.fillRect(10, 260, 181, 45);
+        ctxBoard.fillStyle = "#3498db"; ctxBoard.fillText("Options", 65, 289);
+
+        ctxBoard.font = "bold 26px Arial"; ctxBoard.fillStyle = "#9b59b6"; ctxBoard.fillText("TETRISOW", 30, 55);
+
+    }
+
+    function renderDifficultyMenu() {
+        isDifficultyScreen = true; isInitialScreen = false;
+        ctxBoard.clearRect(0, 0, 201, 400);
+        ctxBoard.fillStyle = "black"; ctxBoard.fillRect(0, 0, 201, 400);
+
+        ctxBoard.font = "bold 20px Arial"; ctxBoard.fillStyle = "#9b59b6"; ctxBoard.fillText("SELECT DIFFICULTY", 10, 55);
+
+        ctxBoard.fillStyle = "#162534"; ctxBoard.fillRect(30, 100, 141, 40);
+        ctxBoard.font = "18px Arial"; ctxBoard.fillStyle = "#2ecc71"; ctxBoard.fillText("Easy", 80, 125);
+
+        ctxBoard.fillStyle = "#162534"; ctxBoard.fillRect(30, 170, 141, 40);
+        ctxBoard.fillStyle = "#f1c40f"; ctxBoard.fillText("Medium", 70, 195);
+
+        ctxBoard.fillStyle = "#162534"; ctxBoard.fillRect(30, 240, 141, 40);
+        ctxBoard.fillStyle = "#e74c3c"; ctxBoard.fillText("Hard", 80, 265);
+
+        ctxBoard.fillStyle = "#c0392b"; ctxBoard.fillRect(55, 330, 91, 35);
+        ctxBoard.fillStyle = "white"; ctxBoard.fillText("Back", 82, 353);
+    }
+
+    function renderLeaderboards() {
+        hideSidebars();
+
+        isLeaderboardScreen = true; isInitialScreen = false; isGameplayActive = false;
+        
+        ctxBoard.clearRect(0, 0, 201, 400);
+        ctxStats.clearRect(0, 0, 125, 400);
+        ctxNext.clearRect(0, 0, 125, 400);
+
+        ctxBoard.fillStyle = "black"; ctxBoard.fillRect(0, 0, 201, 400);
+        ctxStats.fillStyle = "black"; ctxStats.fillRect(0, 0, 125, 400);
+        ctxNext.fillStyle = "black"; ctxNext.fillRect(0, 0, 125, 400);
+
+        ctxBoard.font = "bold 20px Arial"; ctxBoard.fillStyle = "#e74c3c"; ctxBoard.fillText("LEADERBOARDS", 15, 35);
+
+        var leaderboard = localStorage.getItem('ranking') ? JSON.parse(localStorage.getItem('ranking')) : [];
+        leaderboard.sort((a, b) => b.points - a.points);
+        if (leaderboard.length > 8) leaderboard.length = 8;
+
+        ctxBoard.font = "14px Courier New"; ctxBoard.fillStyle = "#3498db";
+        let verticalOffset = 75;
+        
+        for (let i = 0; i < leaderboard.length; i++) {
+            ctxBoard.fillText(`${i + 1}. ${leaderboard[i].name.toUpperCase()} : ${leaderboard[i].points}`, 20, verticalOffset);
+            verticalOffset += 28;
+        }
+
+        ctxBoard.fillStyle = "#c0392b"; ctxBoard.fillRect(55, 340, 91, 35);
+        ctxBoard.font = "18px Arial"; ctxBoard.fillStyle = "white"; ctxBoard.fillText("Back", 82, 363);
+    }
+
+    function renderOptionsScreen() {
+        isOptionsScreen = true; isInitialScreen = false;
+        ctxBoard.clearRect(0, 0, 201, 400);
+        ctxBoard.fillStyle = "black"; ctxBoard.fillRect(0, 0, 201, 400);
+
+        ctxBoard.font = "bold 22px Arial"; ctxBoard.fillStyle = "#9b59b6"; ctxBoard.fillText("OPTIONS", 50, 28);
+
+        ctxBoard.fillStyle = "#c0392b"; ctxBoard.fillRect(15, 50, 171, 40);
+        ctxBoard.font = "14px Arial"; ctxBoard.fillStyle = "white";
+        ctxBoard.fillText("Music: " + (isMusicEnabled ? "ON" : "OFF"), 30, 75);
+
+        ctxBoard.fillStyle = "#c0392b"; ctxBoard.fillRect(15, 120, 171, 40);
+        ctxBoard.fillStyle = "white";
+        ctxBoard.fillText("SFX: " + (isSoundEffectsEnabled ? "ON" : "OFF"), 30, 145);
+
+        ctxBoard.fillStyle = "#c0392b"; ctxBoard.fillRect(15, 190, 171, 40);
+        ctxBoard.fillStyle = "white";
+        ctxBoard.fillText("Reset Leaderboard", 30, 215);
+
+        ctxBoard.fillStyle = "#7f8c8d"; ctxBoard.fillRect(55, 330, 91, 35);
+        ctxBoard.fillStyle = "white"; ctxBoard.fillText("Back", 82, 353);
+    }
+
+    // --- Pointer Coordinate Boundary Collision Detection Router ---
+    canvasBoard.addEventListener("click", function(event) {
+        var rect = canvasBoard.getBoundingClientRect();
+        // Extract real-world precise layout matching configurations
+        var clickX = (event.clientX - rect.left) * (canvasBoard.width / rect.width);
+        var clickY = (event.clientY - rect.top) * (canvasBoard.height / rect.height);
+
+        if (isInitialScreen) {
+            if (clickX >= 10 && clickX <= 191 && clickY >= 100 && clickY <= 145) { renderDifficultyMenu(); }
+            else if (clickX >= 10 && clickX <= 191 && clickY >= 180 && clickY <= 225) { renderLeaderboards(); }
+            else if (clickX >= 10 && clickX <= 191 && clickY >= 260 && clickY <= 305) { renderOptionsScreen(); }
+        }
+        else if (isDifficultyScreen) {
+            if (clickX >= 30 && clickX <= 171 && clickY >= 100 && clickY <= 140) {
+                isEasyMode = true; isMediumMode = false; isHardMode = false; difficultyMultiplier = 0.0; startGameplayLoop();
+            } else if (clickX >= 30 && clickX <= 171 && clickY >= 170 && clickY <= 210) {
+                isEasyMode = false; isMediumMode = true; isHardMode = false; difficultyMultiplier = 0.6; startGameplayLoop();
+            } else if (clickX >= 30 && clickX <= 171 && clickY >= 240 && clickY <= 280) {
+                isEasyMode = false; isMediumMode = false; isHardMode = true; difficultyMultiplier = 1.0; startGameplayLoop();
+            } else if (clickX >= 55 && clickX <= 146 && clickY >= 330 && clickY <= 365) { renderInitialMenu(); }
+        }
+        else if (isLeaderboardScreen) {
+            if (clickX >= 55 && clickX <= 146 && clickY >= 340 && clickY <= 375) { renderInitialMenu(); }
+        }
+        else if (isOptionsScreen) {
+            if (clickX >= 15 && clickX <= 186 && clickY >= 50 && clickY <= 90) {
+                isMusicEnabled = !isMusicEnabled;
+                if (isMusicEnabled) startMusicEngine(); else stopAllMusic();
+                renderOptionsScreen();
+            } else if (clickX >= 15 && clickX <= 186 && clickY >= 120 && clickY <= 160) {
+                isSoundEffectsEnabled = !isSoundEffectsEnabled; renderOptionsScreen();
+            } else if (clickX >= 15 && clickX <= 186 && clickY >= 190 && clickY <= 230) {
+                if (confirm("Reset tracking data?")) { localStorage.removeItem('ranking'); alert("Wiped."); }
+            } else if (clickX >= 55 && clickX <= 146 && clickY >= 330 && clickY <= 365) { renderInitialMenu(); }
+        }
+    });
+
+    // Boot the main window sequence setup
+    renderInitialMenu();
+
+    window.addEventListener("DOMContentLoaded", () => {
+        startMusicEngine();
+        // Fallback for strict browser media autoplay authorization limits
+        window.addEventListener("click", () => {
+            if (isMusicEnabled && audioTracks.every(t => t.paused)) startMusicEngine();
+        }, { once: true });
+    });
+</script>
+</body>
+</html>
